@@ -14,8 +14,15 @@ const LOCAL_STORAGE_KEY = "jspaint multiplayer cursor image";
 
 // How often we broadcast our own position, at most. Browsers can fire
 // pointermove far faster than this; there's no reason to spend a websocket
-// message per tick when nobody's eye can tell 20/sec from 120/sec.
-const BROADCAST_INTERVAL_MS = 50;
+// message per tick when nobody's eye can tell 10/sec from 120/sec. Each
+// message is a billed Durable Object request, so this directly trades
+// smoothness for cost - see MIN_BROADCAST_DISTANCE below too.
+const BROADCAST_INTERVAL_MS = 100;
+
+// Skip sending if the pointer has barely moved since the last broadcast -
+// sub-pixel jitter while holding the mouse still would otherwise still
+// trigger a message every tick.
+const MIN_BROADCAST_DISTANCE = 3;
 
 /** @type {Map<string, {el: HTMLImageElement, image: string}>} */
 const remote_cursors = new Map();
@@ -132,7 +139,8 @@ export function startBroadcastingCursor(send) {
 
 	setInterval(() => {
 		if (pointer_over_canvas) {
-			if (pointer.x !== last_sent.x || pointer.y !== last_sent.y) {
+			const distance = Math.hypot(pointer.x - last_sent.x, pointer.y - last_sent.y);
+			if (Number.isNaN(distance) || distance >= MIN_BROADCAST_DISTANCE) {
 				last_sent = { x: pointer.x, y: pointer.y };
 				send({ type: "cursor", x: pointer.x, y: pointer.y, image: local_cursor_image });
 			}
