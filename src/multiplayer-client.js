@@ -19,6 +19,14 @@ const ROOM_ID = MULTIPLAYER_ROOM_ID;
 // both "not connected" and "connected but not admin".
 export let is_connected = false;
 
+// Test-only (see window.api_for_cypress_tests in app.js): sends a raw
+// message through the real connection, bypassing jspaint's own drawing
+// pipeline. Needed for E2E-testing the rate limiter - real gesture
+// simulation (even synthetic, in-page events) can't reliably outrun the
+// server's refill rate, since jspaint's own per-gesture processing cost
+// already exceeds it.
+export let send_raw_message_for_test = (_message) => {};
+
 /**
  * @param {Blob} blob
  * @returns {Promise<string>} base64, no "data:...;base64," prefix
@@ -84,6 +92,7 @@ function initMultiplayerClient() {
 			send_queue.push(json);
 		}
 	};
+	send_raw_message_for_test = send;
 
 	ws.addEventListener("open", () => {
 		for (const message of send_queue) {
@@ -91,6 +100,20 @@ function initMultiplayerClient() {
 		}
 		send_queue.length = 0;
 	});
+
+	// jspaint applies our own strokes locally the instant they're drawn -
+	// out of band from the network, so a concurrent remote patch can arrive
+	// and get applied while our own patch is still in flight. The server
+	// echoes our own patches back (see server.ts) so we can reconcile: id ->
+	// count of *other* patches applied since we sent it. If a patch comes
+	// back matching one of our own pending ids with count 0, nothing
+	// interleaved - it's already correctly rendered, skip re-applying it
+	// (drawing the same patch on top of itself is a lossy no-op for
+	// anti-aliased/partially-transparent pixels, not a true no-op). If count
+	// > 0, something else was applied in between and our own patch needs to
+	// go on top of that (in true server order) to match every other client.
+	/** @type {Map<string, number>} */
+	const pending_own_patches = new Map();
 
 	// Each "message" event spawns an independent async handler, and
 	// apply_patch_to_canvas() awaits a variable-duration createImageBitmap() -
@@ -121,10 +144,24 @@ function initMultiplayerClient() {
 			// invisible in the thumbnail until the next local mousemove.
 			update_helper_layer();
 		} else if (message.type === "patch") {
+			if (pending_own_patches.has(message.patch.id)) {
+				const interleaved_count = pending_own_patches.get(message.patch.id);
+				pending_own_patches.delete(message.patch.id);
+				if (interleaved_count === 0) {
+					return; // already correctly rendered locally, nothing to reconcile
+				}
+			} else {
+				for (const [id, count] of pending_own_patches) {
+					pending_own_patches.set(id, count + 1);
+				}
+			}
 			await apply_patch_to_canvas(message.patch);
 			noteExternalCanvasChange();
 			update_helper_layer();
 		} else if (message.type === "patch-rejected") {
+			// A rejected patch is never echoed back, so it'd otherwise never
+			// get cleared from pending_own_patches.
+			pending_own_patches.delete(message.id);
 			show_error_message(message.reason);
 		} else if (message.type === "presence") {
 			updateOnlineCount(message.count);
@@ -143,7 +180,18 @@ function initMultiplayerClient() {
 		show_error_message("Couldn't connect to the shared canvas server. Your changes aren't being saved or shared right now.");
 	});
 
+	// Only "error" was handled before - a clean server-initiated close (e.g.
+	// the rate limiter disconnecting a flooding connection) fires "close",
+	// not "error", so is_connected was never reset for that case.
+	ws.addEventListener("close", () => {
+		is_connected = false;
+	});
+
 	initMultiplayerBridge(async (patch) => {
+		// Registered before the (async) encoding below, not just before
+		// send() - a remote patch applied during encoding counts as
+		// interleaved too; see pending_own_patches above.
+		pending_own_patches.set(patch.id, 0);
 		const data = await blob_to_base64(patch.imageBlob);
 		send({
 			type: "patch",

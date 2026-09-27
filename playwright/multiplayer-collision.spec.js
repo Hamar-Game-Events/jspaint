@@ -1,7 +1,9 @@
 // @ts-check
-// 10 users draw concurrently near the same spot: patches don't merge
-// pixel-by-pixel, so whichever the server processes last fully overwrites
-// its rectangle, and every client should converge on that same result.
+// 10 users draw concurrently near the same spot: patches merge pixel-by-
+// pixel (see multiplayer-bridge.js), but the overlapping filled rects in
+// this test are fully opaque throughout, so within the overlap it's still
+// whichever the server processes last that wins - every client should
+// converge on that same result regardless.
 //
 // Env vars (see helpers/local-partykit-server.js for the local default):
 //   PARTYKIT_HOST - connect to a real deployed instance instead of spawning

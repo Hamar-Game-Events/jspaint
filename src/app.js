@@ -15,7 +15,7 @@ import { $G, E, TAU, get_file_extension, get_help_folder_icon, is_discord_embed,
 import { init_webgl_stuff, rotate } from "./image-manipulation.js";
 import { menus } from "./menus.js";
 import { showMessageBox } from "./msgbox.js";
-import { is_connected as is_multiplayer_connected } from "./multiplayer-client.js";
+import { is_connected as is_multiplayer_connected, send_raw_message_for_test as send_raw_multiplayer_message_for_test } from "./multiplayer-client.js";
 import { stopSimulatingGestures } from "./simulate-random-gestures.js";
 import { disable_speech_recognition, enable_speech_recognition, trace_and_sketch_stop } from "./speech-recognition.js";
 import { localStore } from "./storage.js";
@@ -1787,6 +1787,10 @@ window.api_for_cypress_tests = {
 	set_theme,
 	$,
 	get is_multiplayer_connected() { return is_multiplayer_connected; },
+	// Not a plain shorthand reference - that would capture today's (no-op)
+	// value of the binding, not the real `send` it's reassigned to once
+	// initMultiplayerClient() actually runs.
+	send_raw_multiplayer_message_for_test(message) { return send_raw_multiplayer_message_for_test(message); },
 };
 // #endregion
 
