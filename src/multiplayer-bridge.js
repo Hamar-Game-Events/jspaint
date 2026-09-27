@@ -63,12 +63,68 @@ function diff_bounding_rect(before, after) {
 }
 
 /**
+ * Crops `after` to `rect`, but forces any pixel identical to `before` at that
+ * position fully transparent - so compositing this onto a receiver's canvas
+ * (a plain alpha-aware drawImage, unchanged - see multiplayer-client.js) only
+ * touches pixels this stroke actually changed, instead of opaquely
+ * overwriting everything in the bounding rect. Without this, a stroke whose
+ * bounding rect happens to overlap someone else's unrelated drawing would
+ * silently erase it, since PNG patches had no transparency at all before.
+ * @param {ImageData} before
+ * @param {ImageData} after
  * @param {{x: number, y: number, w: number, h: number}} rect
+ * @returns {ImageData}
+ */
+function build_masked_image_data(before, after, rect) {
+	const out = new ImageData(rect.w, rect.h);
+	const a = before.data, b = after.data;
+	const src_width = after.width;
+	for (let y = 0; y < rect.h; y++) {
+		const src_row = (rect.y + y) * src_width * 4;
+		const out_row = y * rect.w * 4;
+		for (let x = 0; x < rect.w; x++) {
+			const src_i = src_row + (rect.x + x) * 4;
+			const out_i = out_row + x * 4;
+			if (a[src_i] !== b[src_i] || a[src_i + 1] !== b[src_i + 1] || a[src_i + 2] !== b[src_i + 2] || a[src_i + 3] !== b[src_i + 3]) {
+				out.data[out_i] = b[src_i];
+				out.data[out_i + 1] = b[src_i + 1];
+				out.data[out_i + 2] = b[src_i + 2];
+				out.data[out_i + 3] = b[src_i + 3];
+			}
+			// else leave as (0, 0, 0, 0) - ImageData is zero-initialized, i.e.
+			// fully transparent, which is exactly "unchanged" here.
+		}
+	}
+	return out;
+}
+
+/**
+ * Slices a sub-rect out of a masked ImageData buffer - `full`'s own origin is
+ * `full_rect.x/y` in the same coordinate space `sub_rect` is expressed in.
+ * @param {ImageData} full
+ * @param {{x: number, y: number, w: number, h: number}} full_rect
+ * @param {{x: number, y: number, w: number, h: number}} sub_rect
+ * @returns {ImageData}
+ */
+function extract_sub_image_data(full, full_rect, sub_rect) {
+	const out = new ImageData(sub_rect.w, sub_rect.h);
+	const local_x = sub_rect.x - full_rect.x;
+	const local_y = sub_rect.y - full_rect.y;
+	for (let y = 0; y < sub_rect.h; y++) {
+		const src_row = ((local_y + y) * full_rect.w + local_x) * 4;
+		const out_row = y * sub_rect.w * 4;
+		out.data.set(full.data.subarray(src_row, src_row + sub_rect.w * 4), out_row);
+	}
+	return out;
+}
+
+/**
+ * @param {ImageData} image_data
  * @returns {Promise<Blob>}
  */
-function crop_to_png_blob(rect) {
-	const cropped = make_canvas(rect.w, rect.h);
-	cropped.ctx.drawImage(main_canvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+function image_data_to_png_blob(image_data) {
+	const cropped = make_canvas(image_data.width, image_data.height);
+	cropped.ctx.putImageData(image_data, 0, 0);
 	return new Promise((resolve, reject) => {
 		cropped.toBlob((blob) => {
 			if (blob) {
@@ -94,16 +150,19 @@ const MAX_TILE_BLOB_BYTES = 85 * 1024;
 const MIN_TILE_SIZE = 64;
 
 /**
- * Crops a rect to a PNG, splitting it into a grid of smaller rects (each
- * cropped and encoded separately) if the whole thing wouldn't fit in one
- * stored patch. Ordinary strokes are small enough that this never splits -
- * it only matters for something like an admin flood-filling a large area of
- * an 8K canvas in one action.
+ * Splits `full_rect`'s masked pixels into a grid of smaller rects (each
+ * encoded separately) if the whole thing wouldn't fit in one stored patch.
+ * Ordinary strokes are small enough that this never splits - it only matters
+ * for something like an admin flood-filling a large area of an 8K canvas in
+ * one action.
+ * @param {ImageData} full_masked_image_data
+ * @param {{x: number, y: number, w: number, h: number}} full_rect
  * @param {{x: number, y: number, w: number, h: number}} rect
  * @returns {Promise<Array<{rect: {x: number, y: number, w: number, h: number}, blob: Blob}>>}
  */
-async function crop_to_png_tiles(rect) {
-	const blob = await crop_to_png_blob(rect);
+async function crop_to_png_tiles(full_masked_image_data, full_rect, rect) {
+	const sub = rect === full_rect ? full_masked_image_data : extract_sub_image_data(full_masked_image_data, full_rect, rect);
+	const blob = await image_data_to_png_blob(sub);
 	if (blob.size <= MAX_TILE_BLOB_BYTES || (rect.w <= MIN_TILE_SIZE && rect.h <= MIN_TILE_SIZE)) {
 		return [{ rect, blob }];
 	}
@@ -113,12 +172,12 @@ async function crop_to_png_tiles(rect) {
 		const left_w = Math.max(1, Math.floor(rect.w / 2));
 		const left = { x: rect.x, y: rect.y, w: left_w, h: rect.h };
 		const right = { x: rect.x + left_w, y: rect.y, w: rect.w - left_w, h: rect.h };
-		return [...await crop_to_png_tiles(left), ...await crop_to_png_tiles(right)];
+		return [...await crop_to_png_tiles(full_masked_image_data, full_rect, left), ...await crop_to_png_tiles(full_masked_image_data, full_rect, right)];
 	} else {
 		const top_h = Math.max(1, Math.floor(rect.h / 2));
 		const top = { x: rect.x, y: rect.y, w: rect.w, h: top_h };
 		const bottom = { x: rect.x, y: rect.y + top_h, w: rect.w, h: rect.h - top_h };
-		return [...await crop_to_png_tiles(top), ...await crop_to_png_tiles(bottom)];
+		return [...await crop_to_png_tiles(full_masked_image_data, full_rect, top), ...await crop_to_png_tiles(full_masked_image_data, full_rect, bottom)];
 	}
 }
 
@@ -161,10 +220,12 @@ export function initMultiplayerBridge(onPatch) {
 		const rect = diff_bounding_rect(node.parent.image_data, node.image_data);
 		if (!rect) { return; } // nothing actually changed
 
+		const masked_image_data = build_masked_image_data(node.parent.image_data, node.image_data, rect);
+
 		// Usually just one tile (the whole rect) - see crop_to_png_tiles.
 		// Each tile becomes its own fully independent patch (own id, own
 		// rect), so nothing downstream needs to know splitting happened.
-		const tiles = await crop_to_png_tiles(rect);
+		const tiles = await crop_to_png_tiles(masked_image_data, rect, rect);
 		const canvasSize = { width: main_canvas.width, height: main_canvas.height };
 		for (const tile of tiles) {
 			onPatch({

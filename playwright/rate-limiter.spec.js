@@ -51,15 +51,48 @@ async function setUpRectangleTool(page) {
 	await page.locator(".choose-shape-style .chooser-option").nth(2).click(); // fill-only style
 }
 
+// A valid 1x1 PNG - content doesn't matter, only that patches keep arriving.
+const TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
 /**
+ * Sends a minimal, fabricated patch directly over the real connection,
+ * bypassing jspaint's drawing pipeline entirely.
  * @param {import("@playwright/test").Page} page
  * @param {number} i
  */
-async function drawOneRectangle(page, i) {
-	const canvasBox = await page.evaluate(() => {
+async function sendFakePatch(page, i) {
+	await page.evaluate(({ id, imageData }) => {
+		window.api_for_cypress_tests.send_raw_multiplayer_message_for_test({
+			type: "patch",
+			patch: {
+				id,
+				toolId: "TOOL_PENCIL",
+				toolLabel: "Pencil",
+				timestamp: Date.now(),
+				rect: { x: 0, y: 0, w: 1, h: 1 },
+				canvasSize: { width: 3840, height: 2160 },
+				image: { mimeType: "image/png", data: imageData },
+			},
+		});
+	}, { id: `flood-test-${i}`, imageData: TINY_PNG });
+}
+
+/** @param {import("@playwright/test").Page} page */
+async function getCanvasBox(page) {
+	return page.evaluate(() => {
 		const rect = document.querySelector("canvas.main-canvas").getBoundingClientRect();
 		return { x: rect.x, y: rect.y };
 	});
+}
+
+/**
+ * @param {import("@playwright/test").Page} page
+ * @param {{x: number, y: number}} canvasBox - see getCanvasBox(); fetched
+ *   once and reused across calls, not per-draw, so this stays fast enough to
+ *   actually outrun the rate limiter when that's the point of the test.
+ * @param {number} i
+ */
+async function drawOneRectangle(page, canvasBox, i) {
 	const x = canvasBox.x + 20 + (i % 20) * 3;
 	const y = canvasBox.y + 20 + (i % 20) * 3;
 	await page.mouse.move(x, y);
@@ -76,9 +109,10 @@ test.describe("patch rate limiting", () => {
 		await page.waitForFunction(() => "api_for_cypress_tests" in window);
 		await page.waitForFunction(() => window.api_for_cypress_tests.is_multiplayer_connected === true, { timeout: 5000 });
 		await setUpRectangleTool(page);
+		const canvasBox = await getCanvasBox(page);
 
 		for (let i = 0; i < 5; i++) {
-			await drawOneRectangle(page, i);
+			await drawOneRectangle(page, canvasBox, i);
 			await page.waitForTimeout(300); // well under the bucket's 150ms refill
 		}
 
@@ -92,26 +126,29 @@ test.describe("patch rate limiting", () => {
 		await page.waitForFunction(() => "api_for_cypress_tests" in window);
 		await page.waitForFunction(() => window.api_for_cypress_tests.is_multiplayer_connected === true, { timeout: 5000 });
 		await setUpRectangleTool(page);
+		const canvasBox = await getCanvasBox(page);
 
 		for (let i = 0; i < 10; i++) {
-			await drawOneRectangle(page, i); // bucket holds 12 tokens
+			await drawOneRectangle(page, canvasBox, i); // bucket holds 12 tokens
 		}
 
 		await expect(page.locator(".window:visible").filter({ hasText: "too fast" })).toHaveCount(0);
 	});
 
 	test("a sustained flood gets a warning, then a disconnect", async ({ page, context }) => {
-		test.setTimeout(45000);
+		test.setTimeout(30000);
 		await pointAtTestServer(context);
 		await page.goto(JSPAINT_URL, { waitUntil: "domcontentloaded" });
 		await page.waitForFunction(() => "api_for_cypress_tests" in window);
 		await page.waitForFunction(() => window.api_for_cypress_tests.is_multiplayer_connected === true, { timeout: 5000 });
-		await setUpRectangleTool(page);
 
-		// Outruns the 150ms refill / 12-token capacity, and crosses the
-		// 30-violation disconnect threshold.
+		// Fabricated patches sent directly, not real drawing gestures - even
+		// synthetic in-page pointer events can't reliably outrun the 150ms
+		// refill, since jspaint's own per-gesture processing cost (~250ms)
+		// already exceeds it. This still exercises the real client reaction
+		// (warning dialog, disconnect) to a real server-side rejection.
 		for (let i = 0; i < 60; i++) {
-			await drawOneRectangle(page, i);
+			await sendFakePatch(page, i);
 		}
 
 		await expect(
@@ -132,28 +169,24 @@ test.describe("cursor rate limiting", () => {
 	/**
 	 * Counts style changes on the remote cursor <img> via MutationObserver
 	 * inside the page (not polling from the test side, which would be paced
-	 * by IPC round-trips rather than the page's actual update rate).
+	 * by IPC round-trips rather than the page's actual update rate). Waits
+	 * for the element to actually exist first (a real await, not a
+	 * fire-and-forget retry loop racing the rest of the test) and stores the
+	 * count directly on `window` - no promise resolved from a separate later
+	 * evaluate() call, which isn't a reliable pattern across calls.
 	 * @param {import("@playwright/test").Page} page
 	 */
 	async function countRemoteCursorMoves(page) {
-		return page.evaluate(() => {
-			return new Promise((resolve) => {
-				const start = () => {
-					const img = document.querySelector("img[style*='position: fixed']");
-					if (!img) {
-						setTimeout(start, 50);
-						return;
-					}
-					let moves = 0;
-					const observer = new MutationObserver(() => { moves++; });
-					observer.observe(img, { attributes: true, attributeFilter: ["style"] });
-					window.__stopCountingRemoteCursorMoves = () => {
-						observer.disconnect();
-						resolve(moves);
-					};
-				};
-				start();
-			});
+		await page.waitForSelector("img[style*='position: fixed']", { timeout: 5000 });
+		await page.evaluate(() => {
+			const img = document.querySelector("img[style*='position: fixed']");
+			window.__remoteCursorMoves = 0;
+			const observer = new MutationObserver(() => { window.__remoteCursorMoves++; });
+			observer.observe(img, { attributes: true, attributeFilter: ["style"] });
+			window.__stopCountingRemoteCursorMoves = () => {
+				observer.disconnect();
+				return window.__remoteCursorMoves;
+			};
 		});
 	}
 
@@ -178,17 +211,23 @@ test.describe("cursor rate limiting", () => {
 			return { x: rect.x, y: rect.y };
 		});
 
-		const movesPromise = countRemoteCursorMoves(observer);
-		// Slower than the client's 50ms throttle and the server's 40ms
-		// refill, so every move should land.
-		for (let i = 0; i < 10; i++) {
+		// One move first, uncounted, so the remote cursor <img> actually
+		// exists before countRemoteCursorMoves waits for it - nothing's ever
+		// been sent to this fresh room yet at this point.
+		await sender.mouse.move(canvasBox.x + 100, canvasBox.y + 100);
+		await sender.waitForTimeout(150);
+		await countRemoteCursorMoves(observer);
+
+		// Slower than the client's 100ms throttle (see BROADCAST_INTERVAL_MS
+		// in multiplayer-cursors.js) and the server's 40ms refill, so every
+		// move should land.
+		for (let i = 1; i < 10; i++) {
 			await sender.mouse.move(canvasBox.x + 100 + i * 5, canvasBox.y + 100 + i * 5);
-			await sender.waitForTimeout(60);
+			await sender.waitForTimeout(150);
 		}
 		await observer.waitForTimeout(300);
 		const moves = await observer.evaluate(() => window.__stopCountingRemoteCursorMoves());
-		expect(await movesPromise).toBe(moves);
-		expect(moves).toBeGreaterThanOrEqual(8); // allow a little slack
+		expect(moves).toBeGreaterThanOrEqual(7); // 9 possible (first move excluded), allow a little slack
 
 		await senderContext.close();
 		await observerContext.close();

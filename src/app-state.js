@@ -16,11 +16,11 @@ const default_magnification = 1;
 /** @type {Tool} */
 const default_tool = window.get_tool_by_id(window.TOOL_PENCIL);
 
-// Fixed at 8K UHD (7680x4320) for the shared canvas - see is_multiplayer_mode
+// Fixed at 4K UHD (3840x2160) for the shared canvas - see is_multiplayer_mode
 // and resize_canvas_without_saving_dimensions, which disable resizing
 // entirely, for everyone, so this is the canvas size, not just its starting point.
-const default_canvas_width = 7680;
-const default_canvas_height = 4320;
+const default_canvas_width = 3840;
+const default_canvas_height = 2160;
 let my_canvas_width = default_canvas_width;
 let my_canvas_height = default_canvas_height;
 
