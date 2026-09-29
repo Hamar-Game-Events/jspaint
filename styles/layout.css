@@ -661,8 +661,11 @@ whereas it breaks component docking calculations if used to shift the colors box
 	z-index: 2;
 }
 .multiplayer-loading-overlay {
-	position: absolute;
-	inset: 0;
+	/* top/left/width/height set from JS (multiplayer-loading-overlay.js) -
+	   kept in sync with $canvas_area's own rect, not a CSS inset, since
+	   $canvas_area scrolls and this needs to track its visible viewport
+	   rather than its (much larger) scrollable content box. */
+	position: fixed;
 	z-index: 10;
 	display: flex;
 	align-items: center;

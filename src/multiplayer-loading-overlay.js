@@ -4,6 +4,8 @@ import { CURSOR_IMAGE_DIR } from "./multiplayer-cursors.js";
 
 /** @type {JQuery<HTMLDivElement> | undefined} */
 let $overlay;
+/** @type {(() => void) | undefined} */
+let stop_tracking_position;
 
 /**
  * Blurs the canvas and blocks drawing input until hideLoadingOverlay() is
@@ -15,27 +17,47 @@ let $overlay;
  */
 export function showLoadingOverlay() {
 	if ($overlay) { return; }
-	$overlay = /** @type {JQuery<HTMLDivElement>} */ ($(E("div")).addClass("multiplayer-loading-overlay"));
+	$overlay = /** @type {JQuery<HTMLDivElement>} */ ($(E("div")).addClass("multiplayer-loading-overlay").appendTo(document.body));
 	$(E("img")).attr({ src: `${CURSOR_IMAGE_DIR}tama.gif`, alt: "" }).addClass("multiplayer-loading-spinner").appendTo($overlay);
-	attach_when_canvas_area_ready();
+	track_canvas_area_position();
 }
 
-// initMultiplayerClient() runs at module-eval time, before jspaint's own
-// startup (session-from-URL loading etc. in sessions.js) has settled - at
-// that point window.$canvas_area can be a reference that's about to be
-// discarded and rebuilt, so appending straight to it here would silently
-// end up in a detached subtree. Retry each frame until the real, final
-// $canvas_area is actually in the document before inserting into it.
-function attach_when_canvas_area_ready() {
-	if (!$overlay) { return; } // hidden again before we got a chance to attach it
-	if (document.body.contains(window.$canvas_area?.[0])) {
-		$overlay.appendTo(window.$canvas_area);
-	} else {
-		requestAnimationFrame(attach_when_canvas_area_ready);
+/**
+ * Fixed-positioned and kept in sync with $canvas_area's own on-screen rect,
+ * rather than being a normal child of it. $canvas_area is scrollable (the
+ * canvas is much bigger than its viewport), and a child positioned with
+ * inset:0 only ever covers that box's un-scrolled top-left corner - once
+ * the user scrolls, the canvas outside that corner would show through
+ * unblurred, defeating the whole point of hiding it. This also sidesteps
+ * $canvas_area not being attached to the document yet when this first
+ * runs (the jspaint startup race the retry loop below waits out).
+ */
+function track_canvas_area_position() {
+	if (!$overlay) { return; } // hidden again before this got a chance to run
+	const canvas_area = window.$canvas_area?.[0];
+	if (!canvas_area || !document.body.contains(canvas_area)) {
+		requestAnimationFrame(track_canvas_area_position);
+		return;
 	}
+	const sync_position = () => {
+		const rect = canvas_area.getBoundingClientRect();
+		$overlay?.css({ top: rect.top, left: rect.left, width: rect.width, height: rect.height });
+	};
+	sync_position();
+	canvas_area.addEventListener("scroll", sync_position);
+	window.addEventListener("resize", sync_position);
+	const resize_observer = new ResizeObserver(sync_position);
+	resize_observer.observe(canvas_area);
+	stop_tracking_position = () => {
+		canvas_area.removeEventListener("scroll", sync_position);
+		window.removeEventListener("resize", sync_position);
+		resize_observer.disconnect();
+	};
 }
 
 export function hideLoadingOverlay() {
+	stop_tracking_position?.();
+	stop_tracking_position = undefined;
 	$overlay?.remove();
 	$overlay = undefined;
 }
