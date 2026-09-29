@@ -6,7 +6,7 @@
 // Run with: npx playwright test playwright/rate-limiter.spec.js
 const { test, expect } = require("@playwright/test");
 const path = require("path");
-const { startLocalPartykitServer } = require("./helpers/local-partykit-server");
+const { startLocalWranglerServer } = require("./helpers/local-wrangler-server");
 
 const JSPAINT_URL = process.env.JSPAINT_URL || "http://localhost:1999";
 const PARTYKIT_TEST_PORT = 1998;
@@ -22,7 +22,7 @@ test.beforeAll(async () => {
 		console.log(`PARTYKIT_HOST set - connecting to ${PARTYKIT_TEST_HOST} directly.`);
 		return;
 	}
-	localServer = await startLocalPartykitServer({ cwd: MULTIPLAYER_SERVER_DIR, port: PARTYKIT_TEST_PORT });
+	localServer = await startLocalWranglerServer({ cwd: MULTIPLAYER_SERVER_DIR, port: PARTYKIT_TEST_PORT });
 });
 
 test.afterAll(async () => {

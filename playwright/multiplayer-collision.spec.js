@@ -5,13 +5,13 @@
 // whichever the server processes last that wins - every client should
 // converge on that same result regardless.
 //
-// Env vars (see helpers/local-partykit-server.js for the local default):
+// Env vars (see helpers/local-wrangler-server.js for the local default):
 //   PARTYKIT_HOST - connect to a real deployed instance instead of spawning
 //     a local throw-away server (needed for CI).
 //   JSPAINT_URL - where the app is served from (default http://localhost:1999).
 const { test, expect } = require("@playwright/test");
 const path = require("path");
-const { startLocalPartykitServer } = require("./helpers/local-partykit-server");
+const { startLocalWranglerServer } = require("./helpers/local-wrangler-server");
 
 const JSPAINT_URL = process.env.JSPAINT_URL || "http://localhost:1999";
 const PARTYKIT_TEST_PORT = 1998; // matches ggjh2027-multiplayer/partykit.json
@@ -33,7 +33,7 @@ test.beforeAll(async () => {
 		console.log(`PARTYKIT_HOST set - connecting to ${PARTYKIT_TEST_HOST} directly.`);
 		return;
 	}
-	localServer = await startLocalPartykitServer({ cwd: MULTIPLAYER_SERVER_DIR, port: PARTYKIT_TEST_PORT });
+	localServer = await startLocalWranglerServer({ cwd: MULTIPLAYER_SERVER_DIR, port: PARTYKIT_TEST_PORT });
 });
 
 test.afterAll(async () => {

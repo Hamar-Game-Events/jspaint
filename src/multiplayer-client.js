@@ -5,6 +5,7 @@ import { is_multiplayer_mode, set_is_admin_connection } from "./helpers.js";
 import { show_error_message, update_helper_layer } from "./functions.js";
 import { updateOnlineCount } from "./multiplayer-user-count.js";
 import { hideRemoteCursor, showRemoteCursor, startBroadcastingCursor } from "./multiplayer-cursors.js";
+import { hideLoadingOverlay, showLoadingOverlay } from "./multiplayer-loading-overlay.js";
 // Generated from the PARTYKIT_HOST env var at dev/install time - see
 // scripts/generate-multiplayer-config.js. Not checked in (per .gitignore);
 // run `npm install` or `npm run dev` at the repo root if this import 404s.
@@ -70,6 +71,10 @@ async function apply_patch_to_canvas(patch) {
 function initMultiplayerClient() {
 	if (!is_multiplayer_mode) { return; }
 
+	// Blurred + drawing-blocked until the "history" handler below hides it -
+	// see multiplayer-loading-overlay.js.
+	showLoadingOverlay();
+
 	// Admins set this manually via the console - localStorage.multiplayer_admin_secret
 	// = "..." - never passed through the URL. See server.ts in the separate
 	// ggjh2027-multiplayer repo for the actual check.
@@ -80,25 +85,48 @@ function initMultiplayerClient() {
 		url.searchParams.set("admin", admin_token);
 	}
 	const ws = new WebSocket(url);
-	/** @type {string[]} */
+	// Holds messages sent before the connection is actually open (e.g. the
+	// user starts drawing or moving the pointer while a slow handshake is
+	// still in progress). Objects, not pre-stringified - so a queued cursor
+	// update can be superseded by a newer one instead of replaying every
+	// stale position once connected.
+	/** @type {object[]} */
 	const send_queue = [];
 
 	/** @param {object} message */
 	const send = (message) => {
-		const json = JSON.stringify(message);
 		if (ws.readyState === WebSocket.OPEN) {
-			ws.send(json);
-		} else {
-			send_queue.push(json);
+			ws.send(JSON.stringify(message));
+			return;
 		}
+		// Only the latest position matters - an older queued one is moot,
+		// and replaying a long backlog of them on open is exactly the kind
+		// of burst that used to trip the server's cursor rate limit
+		// instantly on a slow connection.
+		if (message.type === "cursor" || message.type === "cursor-left") {
+			const stale_index = send_queue.findIndex((m) => m.type === "cursor" || m.type === "cursor-left");
+			if (stale_index !== -1) {
+				send_queue.splice(stale_index, 1);
+			}
+		}
+		send_queue.push(message);
 	};
 	send_raw_message_for_test = send;
 
-	ws.addEventListener("open", () => {
-		for (const message of send_queue) {
-			ws.send(message);
+	// Matches the server's PATCH_RATE_LIMIT_REFILL_MS (see server.ts in the
+	// ggjh2027-multiplayer repo) - queued patches (real committed strokes,
+	// can't just drop the stale ones like cursor updates above) are paced
+	// out at the same rate the bucket refills, instead of all firing
+	// synchronously in one burst the instant the connection opens.
+	const QUEUE_FLUSH_INTERVAL_MS = 150;
+	ws.addEventListener("open", async () => {
+		const queued = send_queue.splice(0, send_queue.length);
+		for (const message of queued) {
+			ws.send(JSON.stringify(message));
+			if (message.type === "patch") {
+				await new Promise((resolve) => setTimeout(resolve, QUEUE_FLUSH_INTERVAL_MS));
+			}
 		}
-		send_queue.length = 0;
 	});
 
 	// jspaint applies our own strokes locally the instant they're drawn -
@@ -143,6 +171,7 @@ function initMultiplayerClient() {
 			// redraw on local pointer activity - a remote patch would sit
 			// invisible in the thumbnail until the next local mousemove.
 			update_helper_layer();
+			hideLoadingOverlay();
 		} else if (message.type === "patch") {
 			if (pending_own_patches.has(message.patch.id)) {
 				const interleaved_count = pending_own_patches.get(message.patch.id);
@@ -178,6 +207,10 @@ function initMultiplayerClient() {
 
 	ws.addEventListener("error", () => {
 		show_error_message("Couldn't connect to the shared canvas server. Your changes aren't being saved or shared right now.");
+		// Without this, a handshake failure would leave the canvas blurred
+		// and undrawable forever - there's no reconnect logic, so this is
+		// the only chance to let the user draw (unsynced) instead.
+		hideLoadingOverlay();
 	});
 
 	// Only "error" was handled before - a clean server-initiated close (e.g.
@@ -185,6 +218,7 @@ function initMultiplayerClient() {
 	// not "error", so is_connected was never reset for that case.
 	ws.addEventListener("close", () => {
 		is_connected = false;
+		hideLoadingOverlay();
 	});
 
 	initMultiplayerBridge(async (patch) => {

@@ -656,6 +656,28 @@ whereas it breaks component docking calculations if used to shift the colors box
 	position: absolute;
 	z-index: 2;
 }
+.multiplayer-loading-overlay {
+	position: absolute;
+	inset: 0;
+	z-index: 10;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(255, 255, 255, 0.35);
+	backdrop-filter: blur(20px);
+	-webkit-backdrop-filter: blur(20px);
+	perspective: 400px;
+}
+.multiplayer-loading-spinner {
+	width: 76px;
+	height: 95px;
+	object-fit: contain;
+	image-rendering: pixelated;
+	animation: multiplayer-loading-spin 1.4s linear infinite;
+}
+@keyframes multiplayer-loading-spin {
+	to { transform: rotateY(-360deg); }
+}
 .canvas-area .handle {
 	position: absolute;
 	width: 3px;
