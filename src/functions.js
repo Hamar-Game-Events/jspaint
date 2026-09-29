@@ -1308,6 +1308,13 @@ function please_enter_a_number() {
 	});
 }
 
+// Repeatedly triggering the same rejection (mashing an admin-only tool
+// button, flooding past the rate limiter) would otherwise stack up one
+// dialog per attempt - tracked by message text so distinct errors can still
+// each show their own.
+/** @type {Set<string>} */
+const open_error_messages = new Set();
+
 // Note: This function is part of the API.
 /**
  * @param {string} message
@@ -1320,12 +1327,20 @@ function show_error_message(message, error) {
 	// It should fall back to an alert.
 	// EMIT stands for "Error Message Itself Test".
 
-	const { $message } = showMessageBox({
+	if (open_error_messages.has(message)) {
+		return;
+	}
+	open_error_messages.add(message);
+
+	const { $message, $window } = showMessageBox({
 		iconID: "error",
 		message,
 		// windowOptions: {
 		// 	innerWidth: 600,
 		// },
+	});
+	$window.on("closed", () => {
+		open_error_messages.delete(message);
 	});
 	// $message.css("max-width", "600px");
 	if (error) {
