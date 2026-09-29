@@ -25,6 +25,13 @@ const PARTYKIT_TEST_PORT = 1998; // matches ggjh2027-multiplayer/partykit.json
 const PARTYKIT_TEST_HOST = process.env.PARTYKIT_HOST || `ws://127.0.0.1:${PARTYKIT_TEST_PORT}`;
 const SPAWN_LOCAL_PARTYKIT_SERVER = !process.env.PARTYKIT_HOST;
 const MULTIPLAYER_SERVER_DIR = path.join(__dirname, "..", "..", "ggjh2027-multiplayer");
+// Drawing a filled shape is admin-only (see ADMIN_ONLY tool/style checks) -
+// the squarer below needs to connect as admin to legitimately produce the
+// filled square this test's merge behavior depends on. Pinned via --var
+// when spawning our own throw-away server so the test doesn't depend on
+// whatever's in the multiplayer repo's own .dev.vars; against a real
+// deployed instance (PARTYKIT_HOST set), this must match its actual secret.
+const ADMIN_SECRET = process.env.MULTIPLAYER_ADMIN_SECRET || "test-admin-secret";
 
 /** @type {{ stop: () => void } | undefined} */
 let localServer;
@@ -34,7 +41,11 @@ test.beforeAll(async () => {
 		console.log(`PARTYKIT_HOST set - connecting to ${PARTYKIT_TEST_HOST} directly.`);
 		return;
 	}
-	localServer = await startLocalWranglerServer({ cwd: MULTIPLAYER_SERVER_DIR, port: PARTYKIT_TEST_PORT });
+	localServer = await startLocalWranglerServer({
+		cwd: MULTIPLAYER_SERVER_DIR,
+		port: PARTYKIT_TEST_PORT,
+		extraArgs: ["--var", `ADMIN_SECRET:${ADMIN_SECRET}`],
+	});
 });
 
 test.afterAll(async () => {
@@ -98,6 +109,12 @@ test("a stroke whose bounding box overlaps a drawing the artist hasn't received 
 		pointAtTestServer(drawerContext, roomId),
 		pointAtTestServer(observerContext, roomId),
 	]);
+	// The squarer draws a fill-style shape below, which is admin-only -
+	// multiplayer-client.js reads this from localStorage before it ever
+	// connects, so it has to be set before the page loads.
+	await squarerContext.addInitScript((secret) => {
+		localStorage.multiplayer_admin_secret = secret;
+	}, ADMIN_SECRET);
 
 	// Holds back every incoming "patch" from the drawer specifically (not
 	// the squarer or observer), releasing them only once told to - this is

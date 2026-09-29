@@ -24,6 +24,13 @@ const USER_COLORS = [
 	"#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
 	"#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#008080",
 ];
+// Drawing a filled shape is admin-only now - this test's whole premise
+// (fully opaque overlapping rects converging to whoever the server
+// processed last) depends on real fills, so every simulated user needs to
+// connect as admin. Pinned via --var when spawning our own throw-away
+// server; against a real deployed instance (PARTYKIT_HOST set), this must
+// match its actual secret.
+const ADMIN_SECRET = process.env.MULTIPLAYER_ADMIN_SECRET || "test-admin-secret";
 
 /** @type {{ stop: () => void } | undefined} */
 let localServer;
@@ -33,7 +40,11 @@ test.beforeAll(async () => {
 		console.log(`PARTYKIT_HOST set - connecting to ${PARTYKIT_TEST_HOST} directly.`);
 		return;
 	}
-	localServer = await startLocalWranglerServer({ cwd: MULTIPLAYER_SERVER_DIR, port: PARTYKIT_TEST_PORT });
+	localServer = await startLocalWranglerServer({
+		cwd: MULTIPLAYER_SERVER_DIR,
+		port: PARTYKIT_TEST_PORT,
+		extraArgs: ["--var", `ADMIN_SECRET:${ADMIN_SECRET}`],
+	});
 });
 
 test.afterAll(async () => {
@@ -57,6 +68,14 @@ test("10 concurrent users drawing near the same spot converge, but overwrite eac
 				body: `export const PARTYKIT_HOST = ${JSON.stringify(PARTYKIT_TEST_HOST)};\nexport const MULTIPLAYER_ROOM_ID = ${JSON.stringify(roomId)};`,
 			})
 		)
+	));
+	// See ADMIN_SECRET above - multiplayer-client.js reads this from
+	// localStorage before it ever connects, so it has to be set before the
+	// page loads.
+	await Promise.all(contexts.map((context) =>
+		context.addInitScript((secret) => {
+			localStorage.multiplayer_admin_secret = secret;
+		}, ADMIN_SECRET)
 	));
 
 	const pages = await Promise.all(contexts.map((context) => context.newPage()));

@@ -30,6 +30,10 @@ html, body, .jspaint {
 .chooser-option {
 	display: flex;
 }
+.chooser-option.admin-only-disabled {
+	filter: saturate(0%) opacity(50%); /* fallback */
+	filter: url("#disabled-inset-filter");
+}
 .choose-shape-style {
 	display: flex;
 	flex-flow: column;

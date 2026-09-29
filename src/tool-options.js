@@ -1,7 +1,7 @@
 // @ts-check
-/* global stroke_size:writable, airbrush_size:writable, brush_shape:writable, brush_size:writable, eraser_size:writable, magnification:writable */
-import { set_magnification } from "./functions.js";
-import { $G, E, make_canvas } from "./helpers.js";
+/* global stroke_size:writable, airbrush_size:writable, brush_shape:writable, brush_size:writable, eraser_size:writable, magnification:writable, localize */
+import { set_magnification, show_error_message } from "./functions.js";
+import { $G, E, is_admin_connection, is_multiplayer_mode, make_canvas } from "./helpers.js";
 import { render_brush, replace_colors_with_swatch, stamp_brush_canvas } from "./image-manipulation.js";
 import { get_theme } from "./theme.js";
 
@@ -212,6 +212,13 @@ const $Choose = (things, display, choose, is_chosen, gray_background_for_unselec
  * @returns {JQuery<HTMLCanvasElement> & { stroke: boolean, fill: boolean }}
  */
 const $ChooseShapeStyle = () => {
+	// A filled shape can cover a huge swath of the shared canvas in one
+	// stroke - the same griefing risk as the eraser/fill tools (see
+	// ADMIN_ONLY_TOOL_IDS in functions.js), just via a different tool.
+	// Outline stays available to everyone; only the fill styles are
+	// admin-only.
+	const fill_allowed = () => !is_multiplayer_mode || is_admin_connection;
+
 	const $chooser = $Choose(
 		[
 			{ stroke: true, fill: false },
@@ -221,6 +228,8 @@ const $ChooseShapeStyle = () => {
 		({ stroke, fill }, is_chosen, reuse_canvas) => {
 			const ss_canvas = reuse_canvas(39, 21);
 			const ss_ctx = ss_canvas.ctx;
+
+			ss_canvas.parentElement?.classList.toggle("admin-only-disabled", fill && !fill_allowed());
 
 			// border px inwards amount
 			let b = 5;
@@ -247,6 +256,10 @@ const $ChooseShapeStyle = () => {
 			return ss_canvas;
 		},
 		({ stroke, fill }) => {
+			if (fill && !fill_allowed()) {
+				show_error_message(localize("Only an admin can fill shapes on the shared canvas."));
+				return;
+			}
 			$chooser.stroke = stroke;
 			$chooser.fill = fill;
 		},
@@ -255,6 +268,18 @@ const $ChooseShapeStyle = () => {
 
 	$chooser.fill = false;
 	$chooser.stroke = true;
+
+	// Admin status arrives asynchronously after connecting (see
+	// multiplayer-client.js) - if a fill style is already selected and it
+	// turns out we're not an admin, fall back to outline instead of
+	// silently keeping a style the draw is no longer allowed to use.
+	$G.on("admin-status-changed", () => {
+		if ($chooser.fill && !fill_allowed()) {
+			$chooser.fill = false;
+			$chooser.stroke = true;
+		}
+		$G.trigger("option-changed");
+	});
 
 	return $chooser;
 };

@@ -13,10 +13,12 @@ const path = require("node:path");
  * @param {string} options.cwd - the multiplayer server project's directory
  *   (where its wrangler.jsonc lives).
  * @param {number} options.port
+ * @param {string[]} [options.extraArgs] - e.g. ["--var", "ADMIN_SECRET:test-secret"]
+ *   to pin a known value instead of depending on the dev's own .dev.vars.
  * @param {number} [options.readyTimeoutMs]
  * @returns {Promise<{ stop: () => void }>}
  */
-async function startLocalWranglerServer({ cwd, port, readyTimeoutMs = 20000 }) {
+async function startLocalWranglerServer({ cwd, port, extraArgs = [], readyTimeoutMs = 20000 }) {
 	// Neither wrangler dev's devtools inspector port nor its local DO/SQLite
 	// persistence directory are derived from --port, so running more than
 	// one of these (e.g. multiple spec files) at once collides on both
@@ -29,7 +31,7 @@ async function startLocalWranglerServer({ cwd, port, readyTimeoutMs = 20000 }) {
 	// grandchild underneath, which can otherwise keep stdio open after exit.
 	const wranglerProcess = spawn(
 		"npx",
-		["wrangler", "dev", "--port", String(port), "--inspector-port", String(inspectorPort), "--persist-to", persistTo],
+		["wrangler", "dev", "--port", String(port), "--inspector-port", String(inspectorPort), "--persist-to", persistTo, ...extraArgs],
 		{ cwd, stdio: "pipe", detached: true },
 	);
 

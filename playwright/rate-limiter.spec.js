@@ -47,8 +47,10 @@ async function pointAtTestServer(context, roomId = freshRoomId()) {
 
 /** @param {import("@playwright/test").Page} page */
 async function setUpRectangleTool(page) {
+	// Default style (outline) is enough to generate a patch per draw - fill
+	// styles are admin-only now, and this test only cares that patches keep
+	// arriving, not what they look like.
 	await page.locator('.tool[title="Rectangle"]').click();
-	await page.locator(".choose-shape-style .chooser-option").nth(2).click(); // fill-only style
 }
 
 // A valid 1x1 PNG - content doesn't matter, only that patches keep arriving.
