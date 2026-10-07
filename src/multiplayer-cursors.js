@@ -8,7 +8,7 @@ import { $G, E, from_canvas_coords } from "./helpers.js";
 import { CURSOR_IMAGES } from "./multiplayer-cursor-images.js";
 
 export const CURSOR_IMAGE_DIR = "images/cursors/multiplayer/";
-const DEFAULT_CURSOR_IMAGE = CURSOR_IMAGES.includes("thisisfine.gif") ? "thisisfine.gif" : CURSOR_IMAGES[0];
+const DEFAULT_CURSOR_IMAGE = CURSOR_IMAGES.includes("msn.gif") ? "msn.gif" : CURSOR_IMAGES[0];
 const CURSOR_DISPLAY_SIZE = 40; // px on screen; native sizes vary per image
 const LOCAL_STORAGE_KEY = "jspaint multiplayer cursor image";
 
