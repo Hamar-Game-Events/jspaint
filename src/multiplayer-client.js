@@ -11,9 +11,20 @@ import { hideLoadingOverlay, showLoadingOverlay } from "./multiplayer-loading-ov
 // run `npm install` or `npm run dev` at the repo root if this import 404s.
 import { PARTYKIT_HOST, MULTIPLAYER_ROOM_ID } from "./multiplayer-config.js";
 
-// Every visitor connects to this one room - see MULTIPLAYER_ROOM_ID in
-// generate-multiplayer-config.js.
-const ROOM_ID = MULTIPLAYER_ROOM_ID;
+// Every visitor connects to the same room. The page embedding jspaint picks it
+// with ?room=<id> (the Game Jam website passes the room set in Sanity), so the
+// canvas can be switched without redeploying. Without one, falls back to
+// MULTIPLAYER_ROOM_ID from generate-multiplayer-config.js.
+const ROOM_ID = room_id_from_url() ?? MULTIPLAYER_ROOM_ID;
+
+/** @returns {string | null} */
+function room_id_from_url() {
+	const room = new URLSearchParams(location.search).get("room");
+	if (room === null) return null;
+	if (/^[\w-]{1,64}$/.test(room)) return room;
+	console.warn(`Ignoring invalid ?room=${JSON.stringify(room)}; using ${MULTIPLAYER_ROOM_ID}`);
+	return null;
+}
 
 // Test-only (see window.api_for_cypress_tests in app.js): true once the
 // handshake completes - unlike is_admin_connection, which starts false for
