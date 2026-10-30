@@ -51,6 +51,47 @@ function random_uuid() {
 }
 
 /**
+ * Brave's fingerprinting protection ("farbling") adds noise to everything
+ * read back from a canvas: getImageData() changes a few hundred scattered
+ * pixels by 1 in one channel, differently on every call. Two snapshots of an
+ * untouched canvas therefore never match exactly, and an exact comparison
+ * turned every stroke into a patch spanning the whole canvas - which the
+ * server rejects as admin-only. Differences this small are ignored; a real
+ * edit changes pixels by more (drawing in a color 1 step away from what's
+ * underneath is the only thing lost).
+ */
+const READBACK_NOISE_TOLERANCE = 1;
+
+/**
+ * One 32-bit word per RGBA pixel, so identical pixels (nearly all of them)
+ * cost a single comparison.
+ * @param {ImageData} image_data
+ * @returns {Uint32Array}
+ */
+const pixels32 = (image_data) => new Uint32Array(image_data.data.buffer, image_data.data.byteOffset, image_data.width * image_data.height);
+
+/**
+ * Whether pixel `p` differs between two snapshots by more than readback
+ * noise - see READBACK_NOISE_TOLERANCE.
+ * @param {Uint8ClampedArray} a
+ * @param {Uint8ClampedArray} b
+ * @param {Uint32Array} a32 - pixels32() of `a`'s ImageData
+ * @param {Uint32Array} b32 - pixels32() of `b`'s ImageData
+ * @param {number} p - pixel index (not byte offset)
+ * @returns {boolean}
+ */
+function pixel_changed(a, b, a32, b32, p) {
+	if (a32[p] === b32[p]) { return false; }
+	const i = p * 4;
+	return (
+		Math.abs(a[i] - b[i]) > READBACK_NOISE_TOLERANCE ||
+		Math.abs(a[i + 1] - b[i + 1]) > READBACK_NOISE_TOLERANCE ||
+		Math.abs(a[i + 2] - b[i + 2]) > READBACK_NOISE_TOLERANCE ||
+		Math.abs(a[i + 3] - b[i + 3]) > READBACK_NOISE_TOLERANCE
+	);
+}
+
+/**
  * Finds the smallest rectangle containing every differing pixel between two
  * same-sized ImageData buffers. Returns null if they're identical.
  * @param {ImageData} before
@@ -61,12 +102,13 @@ function diff_bounding_rect(before, after) {
 	const { width, height } = after;
 	const a = before.data;
 	const b = after.data;
+	const a32 = pixels32(before);
+	const b32 = pixels32(after);
 	let min_x = width, min_y = height, max_x = -1, max_y = -1;
 	for (let y = 0; y < height; y++) {
-		const row_offset = y * width * 4;
+		const row_offset = y * width;
 		for (let x = 0; x < width; x++) {
-			const i = row_offset + x * 4;
-			if (a[i] !== b[i] || a[i + 1] !== b[i + 1] || a[i + 2] !== b[i + 2] || a[i + 3] !== b[i + 3]) {
+			if (pixel_changed(a, b, a32, b32, row_offset + x)) {
 				if (x < min_x) { min_x = x; }
 				if (x > max_x) { max_x = x; }
 				if (y < min_y) { min_y = y; }
@@ -94,6 +136,7 @@ function diff_bounding_rect(before, after) {
 function build_masked_image_data(before, after, rect) {
 	const out = new ImageData(rect.w, rect.h);
 	const a = before.data, b = after.data;
+	const a32 = pixels32(before), b32 = pixels32(after);
 	const src_width = after.width;
 	for (let y = 0; y < rect.h; y++) {
 		const src_row = (rect.y + y) * src_width * 4;
@@ -101,7 +144,7 @@ function build_masked_image_data(before, after, rect) {
 		for (let x = 0; x < rect.w; x++) {
 			const src_i = src_row + (rect.x + x) * 4;
 			const out_i = out_row + x * 4;
-			if (a[src_i] !== b[src_i] || a[src_i + 1] !== b[src_i + 1] || a[src_i + 2] !== b[src_i + 2] || a[src_i + 3] !== b[src_i + 3]) {
+			if (pixel_changed(a, b, a32, b32, src_i / 4)) {
 				out.data[out_i] = b[src_i];
 				out.data[out_i + 1] = b[src_i + 1];
 				out.data[out_i + 2] = b[src_i + 2];
