@@ -3,6 +3,7 @@
 import { initMultiplayerBridge, noteExternalCanvasChange } from "./multiplayer-bridge.js";
 import { is_multiplayer_mode, set_is_admin_connection } from "./helpers.js";
 import { show_error_message, update_helper_layer } from "./functions.js";
+import { showMessageBox } from "./msgbox.js";
 import { updateOnlineCount } from "./multiplayer-user-count.js";
 import { hideRemoteCursor, showRemoteCursor, startBroadcastingCursor } from "./multiplayer-cursors.js";
 import { hideLoadingOverlay, showLoadingOverlay } from "./multiplayer-loading-overlay.js";
@@ -78,6 +79,27 @@ async function apply_patch_to_canvas(patch) {
 	const bitmap = await base64_to_image_bitmap(patch.image.data, patch.image.mimeType);
 	main_ctx.drawImage(bitmap, patch.rect.x, patch.rect.y);
 	bitmap.close();
+}
+
+/**
+ * There's no in-place reconnect: "Reconnect" reloads jspaint (just the
+ * iframe, when embedded), which rebuilds the canvas from the server's
+ * history from scratch - the same path as a first visit. Strokes made while
+ * disconnected were never sent, so nothing is lost that wasn't already.
+ * @param {boolean} was_connected false if the connection never opened
+ */
+function show_disconnected_message(was_connected) {
+	showMessageBox({
+		title: "Disconnected",
+		message: was_connected ?
+			"You've been disconnected from the shared canvas. Anything you draw now won't be saved or shared.\n\nReconnect to see the latest canvas and keep drawing together." :
+			"Couldn't connect to the shared canvas. Anything you draw won't be saved or shared.\n\nTry reconnecting in a moment.",
+		iconID: "error",
+		buttons: [
+			{ label: "Reconnect", value: "reconnect", default: true, action: () => location.reload() },
+			{ label: "Close", value: "close" },
+		],
+	});
 }
 
 function initMultiplayerClient() {
@@ -222,20 +244,23 @@ function initMultiplayerClient() {
 		}
 	}
 
-	ws.addEventListener("error", () => {
-		show_error_message("Couldn't connect to the shared canvas server. Your changes aren't being saved or shared right now.");
-		// Without this, a handshake failure would leave the canvas blurred
-		// and undrawable forever - there's no reconnect logic, so this is
-		// the only chance to let the user draw (unsynced) instead.
-		hideLoadingOverlay();
-	});
+	// Leaving or reloading the page closes the socket too - that's not a
+	// disconnect worth telling anyone about.
+	let unloading = false;
+	window.addEventListener("pagehide", () => { unloading = true; });
 
-	// Only "error" was handled before - a clean server-initiated close (e.g.
-	// the rate limiter disconnecting a flooding connection) fires "close",
-	// not "error", so is_connected was never reset for that case.
+	// "close" follows every "error" (a failed handshake included), and also
+	// covers a clean server-initiated close, e.g. the rate limiter
+	// disconnecting a flooding connection - so the popup lives here, shown
+	// once, and "error" needs no handler of its own.
 	ws.addEventListener("close", () => {
+		const was_connected = is_connected;
 		is_connected = false;
+		// Without this, a handshake failure would leave the canvas blurred
+		// and undrawable forever - the user can still draw (unsynced) instead.
 		hideLoadingOverlay();
+		if (unloading) { return; }
+		show_disconnected_message(was_connected);
 	});
 
 	initMultiplayerBridge(async (patch) => {
