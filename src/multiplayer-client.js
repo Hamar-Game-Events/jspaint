@@ -6,6 +6,7 @@ import { show_error_message, update_helper_layer } from "./functions.js";
 import { updateOnlineCount } from "./multiplayer-user-count.js";
 import { hideRemoteCursor, showRemoteCursor, startBroadcastingCursor } from "./multiplayer-cursors.js";
 import { hideLoadingOverlay, showLoadingOverlay } from "./multiplayer-loading-overlay.js";
+import { drawWatermark, loadWatermark } from "./multiplayer-watermark.js";
 // Generated from the PARTYKIT_HOST env var at dev/install time - see
 // scripts/generate-multiplayer-config.js. Not checked in (per .gitignore);
 // run `npm install` or `npm run dev` at the repo root if this import 404s.
@@ -85,6 +86,7 @@ function initMultiplayerClient() {
 	// Blurred + drawing-blocked until the "history" handler below hides it -
 	// see multiplayer-loading-overlay.js.
 	showLoadingOverlay();
+	loadWatermark();
 
 	// Admins set this manually via the console - localStorage.multiplayer_admin_secret
 	// = "..." - never passed through the URL. See server.ts in the separate
@@ -172,6 +174,10 @@ function initMultiplayerClient() {
 			is_connected = true;
 			set_is_admin_connection(message.isAdmin);
 		} else if (message.type === "history") {
+			// Under everything drawn in the room - see multiplayer-watermark.js.
+			// Only once per page load: there's no reconnect, so history never
+			// arrives twice and the watermark is never drawn over strokes.
+			await drawWatermark();
 			for (const patch of message.patches) {
 				await apply_patch_to_canvas(patch);
 			}
