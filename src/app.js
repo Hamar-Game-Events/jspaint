@@ -1452,6 +1452,9 @@ $canvas.on("pointermove", (e) => {
 });
 $canvas.on("pointerenter", (e) => {
 	pointer_over_canvas = true;
+	// Entering can happen without a pointermove (the canvas appearing under
+	// a still mouse), so take the position from here too.
+	pointer = to_canvas_coords(e);
 
 	update_helper_layer(e);
 

@@ -138,7 +138,11 @@ export function startBroadcastingCursor(send) {
 	let was_over_canvas = false;
 
 	setInterval(() => {
-		if (pointer_over_canvas) {
+		// `pointer` is only set on pointermove/pointerdown, but
+		// pointer_over_canvas turns true on pointerenter, which also fires when
+		// the canvas appears under a mouse that hasn't moved (e.g. when the
+		// loading overlay goes away). Wait for a real position.
+		if (pointer_over_canvas && pointer) {
 			const distance = Math.hypot(pointer.x - last_sent.x, pointer.y - last_sent.y);
 			if (Number.isNaN(distance) || distance >= MIN_BROADCAST_DISTANCE) {
 				last_sent = { x: pointer.x, y: pointer.y };
